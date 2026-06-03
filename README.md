@@ -1,58 +1,80 @@
-# Hermes Watchdog
+# 🐕 Hermes 看门狗
 
-Detect silent Feishu WebSocket deaths in Hermes Agent gateways and auto-recover.
+> 🔍 检测 Hermes Agent 飞书 WebSocket 静默断开并自动恢复
 
-## The Problem
+---
 
-`hermes gateway status` shows `active (running)`, but your bot stopped responding hours ago. This is a **TCP half-open connection** — the Feishu server disconnected, but the OS never told the gateway process. The gateway looks alive but can't receive messages.
+## 🧊 要解决的问题
 
-## How It Works
+`hermes gateway status` 显示 `active (running)`，但你的 Bot 已经几个小时没反应了。这是 **TCP 半开连接** —— 飞书服务端已断开，但操作系统从未通知 gateway 进程。网关看起来"活着"，实则收不到任何消息。
 
-Instead of checking if the process is alive (pointless — it usually is), the watchdog compares two data sources:
+```
+🟢 systemd: 进程正在运行
+💬 飞书服务器: WebSocket 已断开
+🤖 你的 Bot: 假装活着 → 实则已死
 
-1. **Feishu REST API** — pulls the latest user message sent to the bot
-2. **Gateway log** — checks if that message ID ever reached the gateway
+看门狗的作用: 检测这种"假活"并自动重启 🩺
+```
 
-Message exists on Feishu but NOT in the log → WebSocket is dead → restart gateway.
+---
 
-## Quick Start
+## ⚙️ 工作原理
+
+不是检查进程是否存活（没用，通常都活着），而是交叉比对两个数据源：
+
+| 📡 数据源 | 🔍 检查方式 |
+|----------|------------|
+| **飞书 REST API** | 拉取用户最近一条发给 Bot 的消息 |
+| **Gateway 日志** | 检查该消息 ID 是否到达了 gateway |
+
+```
+飞书上有这条消息  +  日志里没这条消息  =  WebSocket 已死  →  自动重启
+```
+
+---
+
+## 🚀 快速开始
 
 ```bash
-# Auto-discover all hermes-gateway-* services
+# 📋 自动发现所有 hermes-gateway-* 服务
 python3 hermes-watchdog.py
 
-# Monitor a single profile
+# 🎯 仅监控单个 profile
 python3 hermes-watchdog.py --profile english
 
-# Dry-run: detect only, no restart
+# 🧪 干跑模式：仅检测，不重启
 python3 hermes-watchdog.py --no-restart
 
-# Schedule via cron (every 10 minutes)
+# ⏰ 通过 cron 定时执行（每 10 分钟）
 */10 * * * * /usr/bin/python3 /path/to/hermes-watchdog.py
 ```
 
-## Cross-Machine Portability
+---
 
-All paths are configurable. The script auto-detects from environment variables with sensible defaults:
+## 🌍 跨机器移植
 
-| Env Var | Default | Purpose |
-|---------|---------|---------|
-| `HERMES_HOME` | `~/.hermes` | Hermes root directory |
-| `WATCHDOG_LOG_DIR` | `$HERMES_HOME/watchdog` | Watchdog log output |
-| `WATCHDOG_STATE_DIR` | same as log dir | Per-profile state files |
+所有路径均可配置。脚本通过环境变量自动检测，并配有合理的默认值：
 
-Run on another machine — just set `HERMES_HOME`:
+| 📌 环境变量 | 📂 默认值 | 🎯 用途 |
+|------------|----------|--------|
+| `HERMES_HOME` | `~/.hermes` | Hermes 根目录 |
+| `WATCHDOG_LOG_DIR` | `$HERMES_HOME/watchdog` | 看门狗日志输出 |
+| `WATCHDOG_STATE_DIR` | 同日志目录 | 每个 profile 的状态文件 |
+
+在其他机器上运行 —— 只需设置 `HERMES_HOME`：
 
 ```bash
 HERMES_HOME=/opt/hermes python3 hermes-watchdog.py --profile default
 ```
 
-## Using with OpenClaw or Other Frameworks
+---
 
-The watchdog is not Hermes-specific. Override the service pattern, restart command, and log path:
+## 🔌 适配 OpenClaw 或其他框架
+
+看门狗不局限于 Hermes。覆盖服务匹配模式、重启命令和日志路径即可适配：
 
 ```bash
-# OpenClaw example
+# 🦀 OpenClaw 示例
 python3 hermes-watchdog.py \
   --profiles-root /root/.openclaw/profiles \
   --service-pattern 'openclaw-gateway-(\w+)' \
@@ -60,60 +82,91 @@ python3 hermes-watchdog.py \
   --gateway-log '{profiles_root}/{profile}/logs/gateway.log'
 ```
 
-⚠️ **Caveat for non-Hermes gateways**: the detection relies on Feishu message IDs (`om_*`) appearing in the gateway log. If your gateway doesn't log message IDs, you'll need a different detection strategy (e.g., timestamp comparison).
+> ⚠️ **非 Hermes 网关注意事项**：检测依赖于飞书消息 ID（`om_*`）出现在 gateway 日志中。如果你的网关不记录消息 ID，需要换一种检测策略（如时间戳对比）。
 
-## CLI Reference
+---
 
-```
-usage: hermes-watchdog.py [options]
-
-  --profile NAME         Monitor a single profile (default: auto-discover all)
-  --profiles-root PATH   Profiles directory (default: ~/.hermes/profiles)
-  --service-pattern RE   systemd unit regex (default: hermes-gateway-(\w+))
-  --restart-cmd CMD      Restart command with {profile} placeholder
-  --gateway-log PATH     Gateway log with {profiles_root} and {profile}
-  --no-restart           Detect only, do not restart
-  --interval N           Min minutes between restarts (default: 15)
-  --missed-threshold N   Minutes before declaring dead (default: 5)
-  --max-age N            Max message age before idle (default: 120)
-  --log-dir PATH         Watchdog log directory
-  --state-dir PATH       State file directory
-```
-
-## Exit Codes
-
-| Code | Meaning | Cron Action |
-|------|---------|-------------|
-| 0 | All healthy or idle | Silent |
-| 1 | Dead WebSocket detected, gateway restarted | Notify |
-| 2 | Watchdog itself failed (creds, API, network) | **Alert** |
-
-Designed for `no_agent=true` cron mode — zero token consumption per check.
-
-## How It Works (Detail)
+## 📖 CLI 参数参考
 
 ```
-1. scan systemd --user for hermes-gateway-*.service (or --profile)
-2. for each running gateway:
-   a. read FEISHU_APP_ID/SECRET from profile .env
-   b. get tenant_access_token
-   c. resolve chat_id (4-tier fallback):
-      .env → state cache → IM API list chats → log grep
-   d. pull latest user message via Feishu IM API
-   e. grep gateway log for message_id
-   f. message exists but NOT in log > 5 min → DEAD → restart
-   g. message > 120 min old → idle (log may have rotated)
-3. cooldown: at most one restart per 15 min per profile
-4. exit with worst-case code across all profiles
+用法: hermes-watchdog.py [选项]
+
+  --profile NAME          🎯 监控单个 profile（默认：自动发现全部）
+  --profiles-root PATH    📂 Profiles 目录（默认：~/.hermes/profiles）
+  --service-pattern RE    🔍 systemd 单元正则（默认：hermes-gateway-(\w+)）
+  --restart-cmd CMD       🔄 重启命令，支持 {profile} 占位符
+  --gateway-log PATH      📝 Gateway 日志路径，支持 {profiles_root} 和 {profile}
+  --no-restart            🧪 仅检测，不重启
+  --interval N            ⏱️ 两次重启最小间隔（分钟，默认：15）
+  --missed-threshold N    ⏳ 判定死亡前的等待时间（分钟，默认：5）
+  --max-age N             📅 消息最大年龄，超时视为空闲（分钟，默认：120）
+  --log-dir PATH          📁 看门狗日志目录
+  --state-dir PATH        💾 状态文件目录
 ```
 
-## Requirements
+---
 
-- Python 3.10+
-- Linux with systemd user services
-- Feishu bot with `im:message:readonly` permission
-- `FEISHU_APP_ID` and `FEISHU_APP_SECRET` in each profile's `.env`
+## 🔢 退出码
 
-## License
+| 码值 | 含义 | 📬 Cron 动作建议 |
+|------|------|-----------------|
+| `0` | ✅ 全部健康或空闲 | 静默 |
+| `1` | 🔴 检测到死 WebSocket，已重启 | 可通知 |
+| `2` | ❌ 看门狗自身失败（凭证/API/网络） | **告警！** |
 
-MIT
+> 💡 设计用于 `no_agent=true` 的 cron 模式 —— 每次检查零 token 消耗。
+
+---
+
+## 🧬 详细工作流程
+
+```
+1. 📡 扫描 systemd --user 中的 hermes-gateway-*.service（或 --profile 指定）
+        │
+2. 🔍 对每个运行中的 gateway：
+   ├── a. 从 profile .env 读取 FEISHU_APP_ID/SECRET
+   ├── b. 获取 tenant_access_token
+   ├── c. 解析 chat_id（4 级降级策略）：
+   │      .env → 状态缓存 → IM API 列表 → 日志 grep
+   ├── d. 通过飞书 IM API 拉取最新用户消息
+   ├── e. 在 gateway 日志中 grep 消息 ID
+   ├── f. 消息存在但日志中没有超过 5 分钟 → 🔴 DEAD → 重启
+   └── g. 消息超过 120 分钟 → 🟢 空闲（日志可能已轮转）
+        │
+3. ⏱️ 冷却保护：每个 profile 每 15 分钟最多重启一次
+        │
+4. 🏁 返回所有 profile 中最严重的退出码
+```
+
+---
+
+## 🛡️ 防误报机制（v2）
+
+| 🛡️ 保护措施 | 📖 说明 |
+|------------|------|
+| 🔄 **重启后保护** | 如果最新消息的时间戳早于上次重启时间，不会误判为死亡 |
+| 📅 **日志轮转保护** | 超过 120 分钟的消息视为日志已被轮转，不会误报 |
+| ⏳ **宽限期** | 消息在 5 分钟内未到达日志不报警（考虑网络延迟） |
+| 🆒 **冷却机制** | 15 分钟内不重复重启同一 gateway |
+| 🔁 **API 重试** | 飞书 API 调用失败自动指数退避重试（最多 2 次） |
+
+---
+
+## 📋 环境要求
+
+| 🧩 组件 | 📌 要求 |
+|--------|--------|
+| 🐍 **Python** | 3.10+ |
+| 🐧 **操作系统** | Linux + systemd user service |
+| 🤖 **飞书 Bot** | 拥有 `im:message:readonly` 权限 |
+| 🔐 **认证密钥** | 每个 profile 的 `.env` 中配置 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET` |
+
+---
+
+## 📜 开源协议
+
+[MIT](https://opensource.org/licenses/MIT)
+
+---
+
+> 🐕 *一个静默运行、从不误报、出问题秒恢复的看门狗。*

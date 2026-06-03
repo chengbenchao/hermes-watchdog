@@ -57,7 +57,7 @@ LOG_DIR = Path(os.environ.get("WATCHDOG_LOG_DIR", HERMES_HOME / "watchdog"))
 STATE_DIR = Path(os.environ.get("WATCHDOG_STATE_DIR", LOG_DIR))
 
 SERVICE_PATTERN = re.compile(r"hermes-gateway-(\w+)\.service")
-RESTART_CMD = ["hermes", "--profile", "{profile}", "gateway", "run", "--replace"]
+RESTART_CMD = ["systemctl", "--user", "restart", "hermes-gateway-{profile}.service"]
 GATEWAY_LOG_TEMPLATE = "{profiles_root}/{profile}/logs/gateway.log"
 
 MISSED_MSG_THRESHOLD_MINUTES = 5
